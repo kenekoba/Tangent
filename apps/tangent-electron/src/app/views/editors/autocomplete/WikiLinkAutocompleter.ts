@@ -196,42 +196,29 @@ export default class WikiLinkAutocompleter implements AutocompleteHandler {
 		return link !== null
 	}
 
-	getCurrentOptionText(hard: boolean = true) {
-		let result = '[['
-		
+	getCurrentLinkInfo(hard: boolean = true) {
+		let target: TreeNode | string = null
 		const mode = this.mode.value
-		let pathText = null
+
 		const selectedNode = this.selectedNode.value
-		if (!hard && mode === 'node' || !selectedNode || !selectedNode.node){
-			pathText = this.pathText.value
-		}
-		else if (selectedNode.node === this.currentTangentNode) {
-			pathText = ''
+		if (!hard && mode === 'node' || !selectedNode || !selectedNode.node) {
+			target = this.pathText.value
 		}
 		else if (selectedNode) {
-
-			const form = this.workspace?.settings?.linkAutocompleteForm.value ?? 'short'
-			let length: 'short'|'full' = 'short'
-			if (form === 'full') {
-				length = form
-			}
-
-			pathText = this.workspace.directoryStore.getPathToItem(selectedNode.node, {
-				includeExtension: showFileType,
-				length
-			})
+			target = selectedNode.node
 		}
-		result += pathText
 
+		let content_id: string = null
 		if (!hard && mode === 'content') {
-			this.contentText.ifHasValue(v => result += v)
+			content_id = this.contentText.ifHasValue(v => v)
 		}
 		else {
-			this.selectedContent.ifHasValue(v => result += '#' + safeHeaderLine(v.text))
+			content_id = this.selectedContent.ifHasValue(v => '#' + safeHeaderLine(v.text))
 		}
 
+		let linkText: string = null
 		if (this.linkText.value) {
-			result += this.linkText.value
+			linkText = this.linkText.value.substring(1)
 		}
 		else {
 			const match = selectedNode?.match
@@ -243,24 +230,113 @@ export default class WikiLinkAutocompleter implements AutocompleteHandler {
 				if (match.input !== relativePath && match.input !== selectedNode.node.path) {
 					// This matched to an alias or header
 					if (selectedNode.node.fileType === 'folder') {
-						result += '|' + selectedNode.node.name
+						linkText = selectedNode.node.name
 					}
 					else {
 						const headerIndex = match.input.lastIndexOf('#')
 						if (headerIndex >= 0 && match.input.substring(0, headerIndex) === relativePath) {
 							// This is a header
-							result += '#' + match.input.substring(headerIndex + 1)
+							content_id = '#' + match.input.substring(headerIndex + 1)
 						}
 						else {
 							// This is an alias
-							result += '|' + paths.basename(match.input, paths.extname(match.input))
+							linkText = paths.basename(match.input, paths.extname(match.input))
 						}
 					}
 				}
 			}
 		}
 
+		return {
+			target,
+			content_id,
+			linkText
+		}
+	}
+
+	getCurrentOptionText() {
+		return this.getCurrentWikiText(true)
+	}
+
+	getCurrentWikiText(hard: boolean = true) {
+		const {
+			target,
+			content_id,
+			linkText
+		} = this.getCurrentLinkInfo(hard)
+
+		let result = '[['
+		
+		if (typeof target === 'string') {
+			result += target
+		}
+		else if (target && target !== this.currentTangentNode) {
+			const form = this.workspace?.settings?.linkAutocompleteForm.value ?? 'short'
+			let length: 'short'|'full' = 'short'
+			if (form === 'full') {
+				length = form
+			}
+
+			result += this.workspace.directoryStore.getPathToItem(target, {
+				includeExtension: showFileType,
+				length
+			})
+		}
+
+		if (content_id) {
+			result += content_id
+		}
+
+		if (linkText != null) {
+			result += '|' + linkText
+		}
+
 		result += ']]'
+
+		return result
+	}
+
+	getCurrentMarkdownText(hard: boolean = true) {
+		const {
+			target,
+			content_id,
+			linkText
+		} = this.getCurrentLinkInfo(hard)
+
+		let result = '['
+
+		if (linkText) {
+			result += linkText
+		}
+		else if (content_id) {
+			result += content_id.substring(1)
+		}
+		else if (typeof target === 'string') {
+			result += paths.basename(target, paths.extname(target))
+		}
+		else if (target) {
+			result += paths.basename(target.path, paths.extname(target.path))
+		}
+
+		result += ']('
+
+		if (typeof target === 'string') {
+			result += target
+		}
+		else if (target !== this.currentTangentNode) {
+			const fromPath = paths.dirname(this.currentTangentNode.path)
+			const relativePath = paths.relative(fromPath, target.path)
+			if (!relativePath.startsWith('..')) {
+				result += './'
+			}
+			result += relativePath
+		}
+
+		if (content_id) {
+			result += content_id
+		}
+
+		result += ')'
 
 		return result
 	}
@@ -369,7 +445,7 @@ export default class WikiLinkAutocompleter implements AutocompleteHandler {
 	}
 
 	applySelection(hard=true) {
-		this.autocomplete.updateAutocomplete(this.getCurrentOptionText(hard))
+		this.autocomplete.updateAutocomplete(this.getCurrentWikiText(hard))
 	}
 
 	applyCurrentText() {
@@ -463,6 +539,14 @@ export default class WikiLinkAutocompleter implements AutocompleteHandler {
 			// can occur
 			this.applySelection()
 			this.end()
+			return
+		}
+
+		if (event.modShortcut === 'Alt+Enter') {
+			// Turn this link into a markdown link
+			this.autocomplete.updateAutocomplete(this.getCurrentMarkdownText())
+			this.end()
+			event.preventDefault()
 			return
 		}
 
