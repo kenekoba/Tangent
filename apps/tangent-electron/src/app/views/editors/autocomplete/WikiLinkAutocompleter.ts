@@ -3,7 +3,7 @@ import { TextDocument, type EditorRange, Editor, normalizeRange, ShortcutEvent }
 import type { AutocompleteHandler, AutocompleteModule } from "./autocompleteModule";
 import { iterateOverChildren, type TreeNode, type TreePredicate, TreePredicateResult } from 'common/trees'
 import { WritableStore } from 'common/stores'
-import { matchWikiLink } from 'common/markdownModel/links'
+import { linkTextFromLink, matchWikiLink, workspaceLinkToMarkdownLink, workspaceLinkToWikiLink, type WorkspaceLink } from 'common/markdownModel/links'
 import { type HeaderInfo, IndexData } from "common/indexing/indexTypes";
 import { safeHeaderLine } from "common/markdownModel/header";
 import { rangeContainsRange } from 'common/typewriterUtils';
@@ -33,10 +33,6 @@ const defaultOptions: WikiLinkAutocompleterOptions = {
 	enableContent: true,
 	enableText: true,
 	enableEmbedding: true
-}
-
-export function showFileType(fileType: string) {
-	return !fileType.match(implicitExtensionsMatch)
 }
 
 export default class WikiLinkAutocompleter implements AutocompleteHandler {
@@ -196,7 +192,7 @@ export default class WikiLinkAutocompleter implements AutocompleteHandler {
 		return link !== null
 	}
 
-	getCurrentLinkInfo(hard: boolean = true) {
+	getCurrentWorkspaceLink(hard: boolean = true): WorkspaceLink {
 		let target: TreeNode | string = null
 		const mode = this.mode.value
 
@@ -210,15 +206,17 @@ export default class WikiLinkAutocompleter implements AutocompleteHandler {
 
 		let content_id: string = null
 		if (!hard && mode === 'content') {
-			content_id = this.contentText.ifHasValue(v => v)
+			this.contentText.ifHasValue(v => {
+				content_id = v.substring(1)
+			})
 		}
 		else {
-			content_id = this.selectedContent.ifHasValue(v => '#' + safeHeaderLine(v.text))
+			this.selectedContent.ifHasValue(v => content_id = safeHeaderLine(v.text))
 		}
 
-		let linkText: string = null
+		let text: string = null
 		if (this.linkText.value) {
-			linkText = this.linkText.value.substring(1)
+			text = this.linkText.value.substring(1)
 		}
 		else {
 			const match = selectedNode?.match
@@ -230,17 +228,17 @@ export default class WikiLinkAutocompleter implements AutocompleteHandler {
 				if (match.input !== relativePath && match.input !== selectedNode.node.path) {
 					// This matched to an alias or header
 					if (selectedNode.node.fileType === 'folder') {
-						linkText = selectedNode.node.name
+						text = selectedNode.node.name
 					}
 					else {
 						const headerIndex = match.input.lastIndexOf('#')
 						if (headerIndex >= 0 && match.input.substring(0, headerIndex) === relativePath) {
 							// This is a header
-							content_id = '#' + match.input.substring(headerIndex + 1)
+							content_id = match.input.substring(headerIndex + 1)
 						}
 						else {
 							// This is an alias
-							linkText = paths.basename(match.input, paths.extname(match.input))
+							text = paths.basename(match.input, paths.extname(match.input))
 						}
 					}
 				}
@@ -250,7 +248,7 @@ export default class WikiLinkAutocompleter implements AutocompleteHandler {
 		return {
 			target,
 			content_id,
-			linkText
+			text
 		}
 	}
 
@@ -259,86 +257,18 @@ export default class WikiLinkAutocompleter implements AutocompleteHandler {
 	}
 
 	getCurrentWikiText(hard: boolean = true) {
-		const {
-			target,
-			content_id,
-			linkText
-		} = this.getCurrentLinkInfo(hard)
-
-		let result = '[['
-		
-		if (typeof target === 'string') {
-			result += target
-		}
-		else if (target && target !== this.currentTangentNode) {
-			const form = this.workspace?.settings?.linkAutocompleteForm.value ?? 'short'
-			let length: 'short'|'full' = 'short'
-			if (form === 'full') {
-				length = form
-			}
-
-			result += this.workspace.directoryStore.getPathToItem(target, {
-				includeExtension: showFileType,
-				length
-			})
-		}
-
-		if (content_id) {
-			result += content_id
-		}
-
-		if (linkText != null) {
-			result += '|' + linkText
-		}
-
-		result += ']]'
-
-		return result
+		return linkTextFromLink(workspaceLinkToWikiLink(
+			this.getCurrentWorkspaceLink(hard),
+			this.workspace.directoryStore,
+			this.workspace?.settings?.linkAutocompleteForm.value ?? 'short'
+		))
 	}
 
 	getCurrentMarkdownText(hard: boolean = true) {
-		const {
-			target,
-			content_id,
-			linkText
-		} = this.getCurrentLinkInfo(hard)
-
-		let result = '['
-
-		if (linkText) {
-			result += linkText
-		}
-		else if (content_id) {
-			result += content_id.substring(1)
-		}
-		else if (typeof target === 'string') {
-			result += paths.basename(target, paths.extname(target))
-		}
-		else if (target) {
-			result += paths.basename(target.path, paths.extname(target.path))
-		}
-
-		result += ']('
-
-		if (typeof target === 'string') {
-			result += target
-		}
-		else if (target !== this.currentTangentNode) {
-			const fromPath = paths.dirname(this.currentTangentNode.path)
-			const relativePath = paths.relative(fromPath, target.path)
-			if (!relativePath.startsWith('..')) {
-				result += './'
-			}
-			result += relativePath
-		}
-
-		if (content_id) {
-			result += content_id
-		}
-
-		result += ')'
-
-		return result
+		return linkTextFromLink(workspaceLinkToMarkdownLink(
+			this.getCurrentWorkspaceLink(hard),
+			this.currentTangentNode
+		))
 	}
 
 	onPathText(pathText: string) {
