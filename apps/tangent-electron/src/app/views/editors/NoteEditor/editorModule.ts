@@ -887,6 +887,9 @@ export default function editorModule(editor: Editor, options: {
 		setNotePath(path) {
 			filepath = path
 		},
+		getNotePath() {
+			return filepath
+		},
 		setSmartParagraphBreaks(value) {
 			smartParagraphBreaks = value
 		},
