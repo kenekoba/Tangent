@@ -284,7 +284,12 @@ export async function toggleLink(editor: MarkdownEditor, selection: EditorRange,
 				const { start, end } = link
 				let [from, to] = editor.doc.selection
 
-				const secondMarkupStart = end - link.href.length - 3
+				let linkLength = link.href.length
+				if (link.content_id != null) {
+					linkLength += 1 + link.content_id.length
+				}
+
+				const secondMarkupStart = end - linkLength - 3
 
 				let change = editor.change
 					.delete([start, start + 1])
