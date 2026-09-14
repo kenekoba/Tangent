@@ -171,7 +171,7 @@ export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRan
 		}
 	}
 
-	// ---- Phase 1: Delete existing highlights (toggle off) ----
+	// ---- Single pass: delete old highlight + insert new one per range ----
 	console.log(ranges.map(([a, b]) => editor.getText([a, b])))
 	let previousHighlight = ''
 	const change = editor.change
@@ -179,15 +179,29 @@ export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRan
 	const origAt = at
 	const origTo = to
 	let prevL = 0
+	let newL = 0
 	let affectedLineCount = 0
 	let targetStart = 0
 	let targetEnd = 0
-	let foundTarget = false
 
-	// ---- Phase 1: Delete existing highlights ----
+	const willInsert = ranges.length === 0 || editor.getText(ranges[0]).match(highlightEmojiMatch)?.[0] !== highlightToken
+
+	// ---- Compute target BEFORE mutating ----
+	let target = selection
+	if (willInsert) {
+		if (origAt === origTo) {
+			target = findWordAroundPositionInDocument(doc, origAt)
+		}
+		targetStart = target[0]
+		targetEnd = target[1]
+		newL = highlightToken.length
+	}
+
+	// ---- Single loop: delete then insert per range ----
+	const lineRanges = willInsert ? doc.getLineRanges(target) : []
+
 	if (ranges.length > 0) {
 		console.log('Toggle off')
-
 		for (const range of ranges) {
 			const [start, end] = range
 			const text = editor.getText(range)
@@ -196,42 +210,42 @@ export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRan
 			previousHighlight = match[0]
 			prevL = previousHighlight.length
 
+			// Delete this range's old markers
 			change
 				.delete([end - prevL, end])
 				.delete([start, start + prevL])
+
+			// Insert new markers for this range immediately (if token changed)
+			if (previousHighlight !== highlightToken) {
+				// Re-anchor the target relative to this range's shift
+				// (start is unchanged by deletion of markers *inside* the range)
+				const lineRangeForThis = doc.getLineRanges([start, end])
+				for (const lineRange of lineRangeForThis) {
+					const [lineStart, lineEnd] = lineRange
+					if (lineRangeForThis.length > 1 && doc.getText(lineRange).trim() === '') {
+						continue
+					}
+					affectedLineCount++
+					const s = Math.max(start, lineStart)
+					const e = Math.min(lineEnd - 1, end)
+
+					change
+						.insert(s, highlightToken)
+						.insert(e - prevL - prevL + newL + newL - newL, highlightToken)
+				}
+			}
 		}
 	}
-
-	// ---- Phase 2: Insert highlights if token changed ----
-	const inserted = previousHighlight !== highlightToken
-	let newL = 0
-
-	if (inserted) {
+	else if (willInsert) {
 		console.log('Toggle on')
-
-		newL = highlightToken.length
-
-		let target = selection
-		if (origAt === origTo) {
-			target = findWordAroundPositionInDocument(doc, origAt)
-		}
-		const [start, end] = target
-		targetStart = start
-		targetEnd = end
-		foundTarget = true
-
-		const lineRanges = doc.getLineRanges(target)
-
 		for (const lineRange of lineRanges) {
 			const [lineStart, lineEnd] = lineRange
-
 			if (lineRanges.length > 1 && doc.getText(lineRange).trim() === '') {
 				continue
 			}
-
 			affectedLineCount++
-			const s = Math.max(start, lineStart)
-			const e = Math.min(lineEnd - 1, end)
+			const s = Math.max(targetStart, lineStart)
+			const e = Math.min(lineEnd - 1, targetEnd)
 
 			change
 				.insert(s, highlightToken)
@@ -239,16 +253,13 @@ export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRan
 		}
 	}
 
-	// ---- Phase 3: Compute final selection from ORIGINAL coords + net delta ----
-	if (inserted) {
+	// ---- Phase 3: Compute final selection ----
+	if (willInsert && previousHighlight !== highlightToken) {
 		const L = newL
-		const deltaPerSide = L - prevL  // net change in marker length per side
+		const deltaPerSide = L - prevL
 
 		if (origAt === origTo && targetStart !== targetEnd && origAt === targetEnd) {
 			console.log('aa')
-			// Cursor was at the end of the word.
-			// Shift outside the trailing marker, accounting for both the
-			// removed old marker and the added new one.
 			change.select(origAt + (L - prevL) + L)
 		}
 		else {
@@ -260,7 +271,6 @@ export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRan
 		}
 	}
 	else if (prevL > 0) {
-		// Pure toggle-off: only the old markers were removed
 		change.select([origAt - prevL, origTo - prevL])
 	}
 
