@@ -171,14 +171,20 @@ export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRan
 		}
 	}
 
+	// ---- Phase 1: Delete existing highlights (toggle off) ----
 	console.log(ranges.map(([a, b]) => editor.getText([a, b])))
 	let previousHighlight = ''
 	const change = editor.change
 
-	// ---- Phase 1: Delete existing highlights (toggle off) ----
-	let newAt = at
-	let newTo = to
+	const origAt = at
+	const origTo = to
+	let prevL = 0
+	let affectedLineCount = 0
+	let targetStart = 0
+	let targetEnd = 0
+	let foundTarget = false
 
+	// ---- Phase 1: Delete existing highlights ----
 	if (ranges.length > 0) {
 		console.log('Toggle off')
 
@@ -188,83 +194,38 @@ export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRan
 
 			const match = text.match(highlightEmojiMatch)
 			previousHighlight = match[0]
-			const prevL = previousHighlight.length
-
-			console.log(
-				previousHighlight,
-				highlightToken,
-				[editor.getText([start, start + prevL]), editor.getText([end - prevL, end])])
+			prevL = previousHighlight.length
 
 			change
 				.delete([end - prevL, end])
 				.delete([start, start + prevL])
-
-			const atNormal = at - start
-			const toNormal = to - start
-			const length = end - start
-
-			if (0 < atNormal && atNormal < prevL) {
-				newAt -= prevL - atNormal
-			}
-			if (atNormal >= prevL) {
-				newAt -= prevL
-			}
-			if (atNormal > length - prevL) {
-				const offset = length - atNormal
-				if (offset > 0) {
-					newAt -= Math.min(prevL, offset)
-				}
-				else {
-					newAt -= prevL
-				}
-			}
-
-			if (0 < toNormal && toNormal < prevL) {
-				newTo -= prevL - toNormal
-			}
-			if (toNormal >= prevL) {
-				newTo -= prevL
-			}
-			if (toNormal > length - prevL) {
-				const offset = length - toNormal
-				if (offset > 0) {
-					newTo -= Math.min(prevL, offset)
-				}
-				else {
-					newTo -= prevL
-				}
-			}
 		}
-
-		// Update cursor to post-deletion coordinates
-		at = newAt
-		to = newTo
-		change.select([newAt, newTo])
 	}
 
-	// ---- Phase 2: Insert highlights (toggle on) if token changed ----
+	// ---- Phase 2: Insert highlights if token changed ----
 	const inserted = previousHighlight !== highlightToken
+	let newL = 0
 
 	if (inserted) {
 		console.log('Toggle on')
 
-		// Use the NEW token's length for insertion geometry
-		const L = highlightToken.length
+		newL = highlightToken.length
 
 		let target = selection
-		if (at === to) {
-			target = findWordAroundPositionInDocument(doc, at)
+		if (origAt === origTo) {
+			target = findWordAroundPositionInDocument(doc, origAt)
 		}
 		const [start, end] = target
+		targetStart = start
+		targetEnd = end
+		foundTarget = true
 
 		const lineRanges = doc.getLineRanges(target)
-		let affectedLineCount = 0
 
 		for (const lineRange of lineRanges) {
 			const [lineStart, lineEnd] = lineRange
 
 			if (lineRanges.length > 1 && doc.getText(lineRange).trim() === '') {
-				// skip empty lines
 				continue
 			}
 
@@ -272,26 +233,35 @@ export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRan
 			const s = Math.max(start, lineStart)
 			const e = Math.min(lineEnd - 1, end)
 
-			// Insert opening token at s, closing token at e.
-			// Both coordinates are in pre-change space; the editor's
-			// change API is expected to apply them consistently.
 			change
 				.insert(s, highlightToken)
 				.insert(e, highlightToken)
 		}
+	}
 
-		if (at === to && start !== end && at === end) {
+	// ---- Phase 3: Compute final selection from ORIGINAL coords + net delta ----
+	if (inserted) {
+		const L = newL
+		const deltaPerSide = L - prevL  // net change in marker length per side
+
+		if (origAt === origTo && targetStart !== targetEnd && origAt === targetEnd) {
 			console.log('aa')
-			// Selection was at the end of a word.
-			// Shift selection _outside_ the inline format characters.
-			change.select(at + L * 2)
+			// Cursor was at the end of the word.
+			// Shift outside the trailing marker, accounting for both the
+			// removed old marker and the added new one.
+			change.select(origAt + (L - prevL) + L)
 		}
 		else {
 			console.log('bb')
-
-			// Shift selection so cursor position stays consistent
-			change.select([at + L, to + L * (affectedLineCount * 2 - 1)])
+			change.select([
+				origAt + deltaPerSide,
+				origTo + deltaPerSide * (affectedLineCount * 2 - 1)
+			])
 		}
+	}
+	else if (prevL > 0) {
+		// Pure toggle-off: only the old markers were removed
+		change.select([origAt - prevL, origTo - prevL])
 	}
 
 	change.apply()
