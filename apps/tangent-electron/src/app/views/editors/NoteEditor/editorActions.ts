@@ -171,7 +171,6 @@ export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRan
 		}
 	}
 
-	// ---- Single pass: delete old highlight + insert new one per range ----
 	console.log(ranges.map(([a, b]) => editor.getText([a, b])))
 	let previousHighlight = ''
 	const change = editor.change
@@ -184,7 +183,9 @@ export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRan
 	let targetStart = 0
 	let targetEnd = 0
 
-	const willInsert = ranges.length === 0 || editor.getText(ranges[0]).match(highlightEmojiMatch)?.[0] !== highlightToken
+	const willInsert =
+		ranges.length === 0 ||
+		editor.getText(ranges[0]).match(highlightEmojiMatch)?.[0] !== highlightToken
 
 	// ---- Compute target BEFORE mutating ----
 	let target = selection
@@ -197,12 +198,14 @@ export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRan
 		newL = highlightToken.length
 	}
 
-	// ---- Single loop: delete then insert per range ----
-	const lineRanges = willInsert ? doc.getLineRanges(target) : []
-
+	// ---- Single loop: delete then insert per range, back-to-front ----
 	if (ranges.length > 0) {
 		console.log('Toggle off')
-		for (const range of ranges) {
+
+		// Process from last range to first so earlier coords stay valid
+		const orderedRanges = [...ranges].sort((a, b) => b[0] - a[0])
+
+		for (const range of orderedRanges) {
 			const [start, end] = range
 			const text = editor.getText(range)
 
@@ -210,39 +213,34 @@ export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRan
 			previousHighlight = match[0]
 			prevL = previousHighlight.length
 
-			// Delete this range's old markers
-			change
-				.delete([end - prevL, end])
-				.delete([start, start + prevL])
+			if (previousHighlight === highlightToken) {
+				// Pure delete for this range
+				change
+					.delete([end - prevL, end])
+					.delete([start, start + prevL])
+			}
+			else {
+				// Atomic replace: strip old markers, wrap with new ones
+				const inner = text.slice(prevL, text.length - prevL)
+				const replacement = highlightToken + inner + highlightToken
 
-			// Insert new markers for this range immediately (if token changed)
-			if (previousHighlight !== highlightToken) {
-				// Re-anchor the target relative to this range's shift
-				// (start is unchanged by deletion of markers *inside* the range)
-				const lineRangeForThis = doc.getLineRanges([start, end])
-				for (const lineRange of lineRangeForThis) {
-					const [lineStart, lineEnd] = lineRange
-					if (lineRangeForThis.length > 1 && doc.getText(lineRange).trim() === '') {
-						continue
-					}
-					affectedLineCount++
-					const s = Math.max(start, lineStart)
-					const e = Math.min(lineEnd - 1, end)
-
-					change
-						.insert(s, highlightToken)
-						.insert(e - prevL - prevL + newL + newL - newL, highlightToken)
-				}
+				change.delete([start, end])
+				change.insert(start, replacement)
+				affectedLineCount++
 			}
 		}
 	}
 	else if (willInsert) {
 		console.log('Toggle on')
+
+		const lineRanges = doc.getLineRanges(target)
 		for (const lineRange of lineRanges) {
 			const [lineStart, lineEnd] = lineRange
+
 			if (lineRanges.length > 1 && doc.getText(lineRange).trim() === '') {
 				continue
 			}
+
 			affectedLineCount++
 			const s = Math.max(targetStart, lineStart)
 			const e = Math.min(lineEnd - 1, targetEnd)
