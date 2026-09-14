@@ -10,6 +10,7 @@ import { numberOf } from 'common/stringUtils'
 import { getAutoChild, getDelimiterForGlyph, getGlyphForNumber, ListForm, listMatcher, matchList, splitCheckboxGlyphs, type ListDefinition } from 'common/markdownModel/list'
 import { indentMatcher } from 'common/markdownModel/matches'
 import { deepEqual } from 'fast-equals'
+import { highlightEmojiMatch, highlightEmojiToClassDescriptor, highlightTokens } from 'common/markdownModel/formatting'
 
 export function toggleInlineFormat(editor: Editor, selection: EditorRange, formattingCharacters: string, predicate: AttributePredicate, event?: Event) {
 	const { doc } = editor
@@ -131,6 +132,162 @@ export function toggleInlineFormat(editor: Editor, selection: EditorRange, forma
 	}
 }
 
+/**
+ * modified version of `toggleInlineFormat`
+ */
+export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRange, highlightToken: string) {
+	console.log(highlightToken)
+
+	const { doc } = editor
+	selection = normalizeRange(selection)
+	if (!selection) return
+	const [at, to] = selection
+
+	const predicate: AttributePredicate = attr => {
+		// console.log(attr)
+		const all = highlightTokens.map(highlightEmojiToClassDescriptor)
+		const your = attr?.highlight
+		const m = all.indexOf(your) !== -1
+		console.log(all.slice(-4), attr, your)
+		// console.log(m, attr?.highlight, all)
+		return m || null
+	}
+
+	const ranges = getRangesIntersecting(doc, selection, predicate)
+	if (ranges.length === 0 && at === to) {
+		// Collapsed selection
+		// check back
+		const [start, end] = doc.getLineRange(at)
+		let range: EditorRange = null
+		if (start < at - 1) {
+			range = getRangeWhile(doc, [at - 1, to], predicate, 'start')
+		}
+		if (!range && end > to + 1) {
+			// check forward
+			range = getRangeWhile(doc, [at, to + 1], predicate, 'end')
+		}
+		if (range) {
+			ranges.push(range)
+		}
+	}
+
+	let L = 0
+	let previousHighlight = ''
+	let deleted = ''
+
+	console.log(ranges.map(([a, b]) => editor.getText([a, b])))
+
+	const change = editor.change
+	const inserted = ranges.length === 0
+
+	if (!inserted) {
+		console.log('Toggle off')
+
+		// Toggle off
+		let newAt = at
+		let newTo = to
+
+		for (const range of ranges) {
+			const [start, end] = range
+			const text = editor.getText(range)
+
+			const match = text.match(highlightEmojiMatch)
+			previousHighlight = match[0]
+			L = previousHighlight.length
+
+			console.log(
+				previousHighlight,
+				highlightToken,
+				[editor.getText([start, start + L]), editor.getText([end - L, end])])
+
+			change
+				.delete([end - L, end])
+				.delete([start, start + L])
+
+			const atNormal = at - start
+			const toNormal = to - start
+			const length = end - start
+
+			if (0 < atNormal && atNormal < L) {
+				newAt -= L - atNormal
+			}
+			if (atNormal >= L) {
+				newAt -= L
+			}
+			if (atNormal > length - L) {
+				const offset = length - atNormal
+				if (offset > 0) {
+					newAt -= Math.min(L, offset)
+				}
+				else {
+					newAt -= L
+				}
+			}
+
+			if (0 < toNormal && toNormal < L) {
+				newTo -= L - toNormal
+			}
+			if (toNormal >= L) {
+				newTo -= L
+			}
+			if (toNormal > length - L) {
+				const offset = length - toNormal
+				if (offset > 0) {
+					newTo -= Math.min(L, offset)
+				}
+				else {
+					newTo -= L
+				}
+			}
+		}
+
+		change.select([newAt, newTo])
+	}
+	else {
+		console.log('Toggle on')
+
+		// Toggle on
+		let target = selection
+		if (at === to) {
+			target = findWordAroundPositionInDocument(doc, at)
+		}
+		const [start, end] = target
+
+		const lineRanges = doc.getLineRanges(target)
+		let affectedLineCount = 0
+		for (const lineRange of lineRanges) {
+			const [lineStart, lineEnd] = lineRange
+
+			if (lineRanges.length > 1 && doc.getText(lineRange).trim() === '') {
+				// skip empty lines
+				continue
+			}
+
+			affectedLineCount++
+			const s = Math.max(start, lineStart)
+			const e = Math.min(lineEnd - 1, end)
+			change
+				.insert(s, highlightToken)
+				.insert(e - L - L, highlightToken)
+		}
+
+		if (at === to && start !== end && at === end) {
+			console.log('aa')
+			// Selection was at the end of a word.
+			// Shift selection _outside_ the inline format characters.
+			change.select(at + L * 2)
+		}
+		else {
+			console.log('bb')
+
+			// Shift selection so cursor position stays consistent
+			change.select([at + L, to + L * (affectedLineCount * 2 - 1)])
+		}
+	}
+
+	change.apply()
+}
+
 export function toggleItalic(editor: MarkdownEditor, event?: Event) {
 	toggleInlineFormat(
 		editor,
@@ -152,12 +309,10 @@ export function toggleBold(editor: MarkdownEditor, event?: Event) {
 }
 
 export function toggleHightlight(editor: MarkdownEditor, event?: Event) {
-	return toggleInlineFormat(
+	return toggleInlineHighlightFormat(
 		editor,
 		editor.doc.selection,
 		'==',
-		attr => attr?.highlight,
-		event
 	)
 }
 
