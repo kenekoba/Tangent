@@ -141,7 +141,7 @@ export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRan
 	const { doc } = editor
 	selection = normalizeRange(selection)
 	if (!selection) return
-	const [at, to] = selection
+	let [at, to] = selection
 
 	const predicate: AttributePredicate = attr => {
 		// console.log(attr)
@@ -171,21 +171,16 @@ export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRan
 		}
 	}
 
-	let L = 0
-	let previousHighlight = ''
-	let deleted = ''
-
 	console.log(ranges.map(([a, b]) => editor.getText([a, b])))
-
+	let previousHighlight = ''
 	const change = editor.change
-	const inserted = ranges.length === 0
 
-	if (!inserted) {
+	// ---- Phase 1: Delete existing highlights (toggle off) ----
+	let newAt = at
+	let newTo = to
+
+	if (ranges.length > 0) {
 		console.log('Toggle off')
-
-		// Toggle off
-		let newAt = at
-		let newTo = to
 
 		for (const range of ranges) {
 			const [start, end] = range
@@ -193,60 +188,69 @@ export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRan
 
 			const match = text.match(highlightEmojiMatch)
 			previousHighlight = match[0]
-			L = previousHighlight.length
+			const prevL = previousHighlight.length
 
 			console.log(
 				previousHighlight,
 				highlightToken,
-				[editor.getText([start, start + L]), editor.getText([end - L, end])])
+				[editor.getText([start, start + prevL]), editor.getText([end - prevL, end])])
 
 			change
-				.delete([end - L, end])
-				.delete([start, start + L])
+				.delete([end - prevL, end])
+				.delete([start, start + prevL])
 
 			const atNormal = at - start
 			const toNormal = to - start
 			const length = end - start
 
-			if (0 < atNormal && atNormal < L) {
-				newAt -= L - atNormal
+			if (0 < atNormal && atNormal < prevL) {
+				newAt -= prevL - atNormal
 			}
-			if (atNormal >= L) {
-				newAt -= L
+			if (atNormal >= prevL) {
+				newAt -= prevL
 			}
-			if (atNormal > length - L) {
+			if (atNormal > length - prevL) {
 				const offset = length - atNormal
 				if (offset > 0) {
-					newAt -= Math.min(L, offset)
+					newAt -= Math.min(prevL, offset)
 				}
 				else {
-					newAt -= L
+					newAt -= prevL
 				}
 			}
 
-			if (0 < toNormal && toNormal < L) {
-				newTo -= L - toNormal
+			if (0 < toNormal && toNormal < prevL) {
+				newTo -= prevL - toNormal
 			}
-			if (toNormal >= L) {
-				newTo -= L
+			if (toNormal >= prevL) {
+				newTo -= prevL
 			}
-			if (toNormal > length - L) {
+			if (toNormal > length - prevL) {
 				const offset = length - toNormal
 				if (offset > 0) {
-					newTo -= Math.min(L, offset)
+					newTo -= Math.min(prevL, offset)
 				}
 				else {
-					newTo -= L
+					newTo -= prevL
 				}
 			}
 		}
 
+		// Update cursor to post-deletion coordinates
+		at = newAt
+		to = newTo
 		change.select([newAt, newTo])
 	}
-	else {
+
+	// ---- Phase 2: Insert highlights (toggle on) if token changed ----
+	const inserted = previousHighlight !== highlightToken
+
+	if (inserted) {
 		console.log('Toggle on')
 
-		// Toggle on
+		// Use the NEW token's length for insertion geometry
+		const L = highlightToken.length
+
 		let target = selection
 		if (at === to) {
 			target = findWordAroundPositionInDocument(doc, at)
@@ -255,6 +259,7 @@ export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRan
 
 		const lineRanges = doc.getLineRanges(target)
 		let affectedLineCount = 0
+
 		for (const lineRange of lineRanges) {
 			const [lineStart, lineEnd] = lineRange
 
@@ -266,9 +271,13 @@ export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRan
 			affectedLineCount++
 			const s = Math.max(start, lineStart)
 			const e = Math.min(lineEnd - 1, end)
+
+			// Insert opening token at s, closing token at e.
+			// Both coordinates are in pre-change space; the editor's
+			// change API is expected to apply them consistently.
 			change
 				.insert(s, highlightToken)
-				.insert(e - L - L, highlightToken)
+				.insert(e, highlightToken)
 		}
 
 		if (at === to && start !== end && at === end) {
