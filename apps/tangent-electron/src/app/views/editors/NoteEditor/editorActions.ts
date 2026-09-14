@@ -136,8 +136,6 @@ export function toggleInlineFormat(editor: Editor, selection: EditorRange, forma
  * modified version of `toggleInlineFormat`
  */
 export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRange, highlightToken: string) {
-	console.log(highlightToken)
-
 	const { doc } = editor
 	selection = normalizeRange(selection)
 	if (!selection) return
@@ -148,8 +146,6 @@ export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRan
 		const all = highlightTokens.map(highlightEmojiToClassDescriptor)
 		const your = attr?.highlight
 		const m = all.indexOf(your) !== -1
-		console.log(all.slice(-4), attr, your)
-		// console.log(m, attr?.highlight, all)
 		return m || null
 	}
 
@@ -171,14 +167,11 @@ export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRan
 		}
 	}
 
-	console.log(ranges.map(([a, b]) => editor.getText([a, b])))
 	let previousHighlight = ''
 	const change = editor.change
 
-	const origAt = at
-	const origTo = to
-	let prevL = 0
-	let newL = 0
+	let previousLength = 0
+	let newLength = 0
 	let affectedLineCount = 0
 	let targetStart = 0
 	let targetEnd = 0
@@ -190,18 +183,15 @@ export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRan
 	// ---- Compute target BEFORE mutating ----
 	let target = selection
 	if (willInsert) {
-		if (origAt === origTo) {
-			target = findWordAroundPositionInDocument(doc, origAt)
+		if (at === to) {
+			target = findWordAroundPositionInDocument(doc, at)
 		}
 		targetStart = target[0]
 		targetEnd = target[1]
-		newL = highlightToken.length
+		newLength = highlightToken.length
 	}
 
-	// ---- Single loop: delete then insert per range, back-to-front ----
 	if (ranges.length > 0) {
-		console.log('Toggle off')
-
 		// Process from last range to first so earlier coords stay valid
 		const orderedRanges = [...ranges].sort((a, b) => b[0] - a[0])
 
@@ -211,17 +201,17 @@ export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRan
 
 			const match = text.match(highlightEmojiMatch)
 			previousHighlight = match[0]
-			prevL = previousHighlight.length
+			previousLength = previousHighlight.length
 
 			if (previousHighlight === highlightToken) {
 				// Pure delete for this range
 				change
-					.delete([end - prevL, end])
-					.delete([start, start + prevL])
+					.delete([end - previousLength, end])
+					.delete([start, start + previousLength])
 			}
 			else {
 				// Atomic replace: strip old markers, wrap with new ones
-				const inner = text.slice(prevL, text.length - prevL)
+				const inner = text.slice(previousLength, text.length - previousLength)
 				const replacement = highlightToken + inner + highlightToken
 
 				change.delete([start, end])
@@ -231,8 +221,6 @@ export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRan
 		}
 	}
 	else if (willInsert) {
-		console.log('Toggle on')
-
 		const lineRanges = doc.getLineRanges(target)
 		for (const lineRange of lineRanges) {
 			const [lineStart, lineEnd] = lineRange
@@ -251,25 +239,21 @@ export function toggleInlineHighlightFormat(editor: Editor, selection: EditorRan
 		}
 	}
 
-	// ---- Phase 3: Compute final selection ----
 	if (willInsert && previousHighlight !== highlightToken) {
-		const L = newL
-		const deltaPerSide = L - prevL
+		const deltaPerSide = newLength - previousLength
 
-		if (origAt === origTo && targetStart !== targetEnd && origAt === targetEnd) {
-			console.log('aa')
-			change.select(origAt + (L - prevL) + L)
+		if (at === to && targetStart !== targetEnd && at === targetEnd) {
+			change.select(at + (newLength - previousLength) + newLength)
 		}
 		else {
-			console.log('bb')
 			change.select([
-				origAt + deltaPerSide,
-				origTo + deltaPerSide * (affectedLineCount * 2 - 1)
+				at + deltaPerSide,
+				to + deltaPerSide * (affectedLineCount * 2 - 1)
 			])
 		}
 	}
-	else if (prevL > 0) {
-		change.select([origAt - prevL, origTo - prevL])
+	else if (previousLength > 0) {
+		change.select([at - previousLength, to - previousLength])
 	}
 
 	change.apply()
